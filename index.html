@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pantry — Grocery List Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- SETUP MODAL -->
+  <div id="setup-modal" class="modal-overlay active">
+    <div class="modal-box setup-box">
+      <div class="setup-logo">🛒</div>
+      <h1 class="setup-title">Pantry</h1>
+      <p class="setup-sub">Connect your Google Sheet to get started. Your data stays in your own spreadsheet.</p>
+      <div class="setup-steps">
+        <div class="step">
+          <span class="step-num">1</span>
+          <span>Make a copy of the <a href="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/copy" target="_blank">Pantry Template Sheet</a></span>
+        </div>
+        <div class="step">
+          <span class="step-num">2</span>
+          <span>In your copy, go to <strong>Extensions → Apps Script</strong> and deploy as a Web App (see README)</span>
+        </div>
+        <div class="step">
+          <span class="step-num">3</span>
+          <span>Paste your Web App URL below</span>
+        </div>
+      </div>
+      <input id="sheet-url-input" class="setup-input" type="url" placeholder="https://script.google.com/macros/s/..." />
+      <button class="btn-primary setup-connect" onclick="connectSheet()">Connect Sheet</button>
+      <p class="setup-note">Your URL is saved locally in your browser only.</p>
+    </div>
+  </div>
+
+  <!-- GENERIC MODAL -->
+  <div id="generic-modal" class="modal-overlay">
+    <div class="modal-box" id="generic-modal-box">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <div id="generic-modal-content"></div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast" class="toast"></div>
+
+  <!-- APP SHELL -->
+  <div id="app" class="app hidden">
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">🛒</span>
+        <span class="sidebar-title">Pantry</span>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-btn active" data-view="database" onclick="switchView('database')">
+          <span class="nav-icon">📦</span> Item Database
+        </button>
+        <button class="nav-btn" data-view="list" onclick="switchView('list')">
+          <span class="nav-icon">📋</span> Shopping List
+          <span id="list-badge" class="badge hidden">0</span>
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="btn-ghost small" onclick="openSetup()">⚙ Settings</button>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main">
+
+      <!-- DATABASE VIEW -->
+      <section id="view-database" class="view active">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">Item Database</h2>
+            <p class="view-sub">Organize items into categories</p>
+          </div>
+          <div class="view-actions">
+            <button class="btn-secondary" onclick="openAddCategory()">+ Category</button>
+            <button class="btn-primary" onclick="openAddItem()">+ Item</button>
+          </div>
+        </div>
+
+        <div id="db-loading" class="loading-state">
+          <div class="spinner"></div> Loading your database…
+        </div>
+        <div id="db-empty" class="empty-state hidden">
+          <div class="empty-icon">🥦</div>
+          <p>No items yet. Start by adding a category.</p>
+        </div>
+        <div id="categories-container" class="categories-grid hidden"></div>
+      </section>
+
+      <!-- LIST VIEW -->
+      <section id="view-list" class="view hidden">
+        <div class="view-header">
+          <div>
+            <h2 class="view-title">Shopping List</h2>
+            <p class="view-sub" id="list-subtitle">Your current shopping list</p>
+          </div>
+          <div class="view-actions">
+            <button class="btn-secondary" onclick="openAddQuickItem()">+ Quick Add</button>
+            <button class="btn-secondary" onclick="openNewListModal()">↺ New List</button>
+            <button class="btn-danger" onclick="clearChecked()">Clear Checked</button>
+          </div>
+        </div>
+
+        <div id="list-loading" class="loading-state hidden">
+          <div class="spinner"></div> Loading…
+        </div>
+        <div id="list-empty" class="empty-state hidden">
+          <div class="empty-icon">🛍️</div>
+          <p>Your list is empty. Add items from the database.</p>
+        </div>
+        <div id="list-container" class="list-sections hidden"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
