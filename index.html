@@ -87,6 +87,11 @@
           <div>
             <h2 class="view-title">Item Database</h2>
             <p class="view-sub">Organize items into categories</p>
+            <!-- Mobile list selector (desktop uses sidebar) -->
+            <div class="mobile-list-selector-row" style="display:none">
+              <select class="sidebar-list-select" onchange="onListSelect(event)"></select>
+              <button class="btn-icon sidebar-list-options" onclick="openListOptionsModal()">⚙</button>
+            </div>
           </div>
           <div class="view-actions">
             <button class="btn-secondary" onclick="openAddCategory()">+ Category</button>
