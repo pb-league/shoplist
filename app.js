@@ -308,12 +308,12 @@ function makeCategoryCard(cat, collapsed) {
 
 function renderItemRow(item) {
   const inList   = shoppingList.some(s => s.itemId === item.id);
-  const dotClick = inList
-    ? 'removeFromList(\'' + item.id + '\');event.stopPropagation()'
-    : 'addToList(\'' + item.id + '\',1);event.stopPropagation()';
-  return '<div class="item-row ' + (inList ? 'in-list' : '') + '" id="item-row-' + item.id + '" draggable="true" data-item-id="' + item.id + '">' +
-    '<span class="item-drag-handle">⠿</span>' +
-    '<span class="item-dot" title="' + (inList ? 'Remove from list' : 'Add to list (qty 1)') + '" onclick="' + dotClick + '"></span>' +
+  const rowClick = inList
+    ? 'removeFromList(\'' + item.id + '\')'
+    : 'addToList(\'' + item.id + '\',1)';
+  return '<div class="item-row ' + (inList ? 'in-list' : '') + '" id="item-row-' + item.id + '" draggable="true" data-item-id="' + item.id + '" onclick="' + rowClick + '">' +
+    '<span class="item-drag-handle" onclick="event.stopPropagation()">⠿</span>' +
+    '<span class="item-dot"></span>' +
     (!inList ? '<button class="item-qty-btn" onclick="openAddWithQty(\'' + item.id + '\');event.stopPropagation()" title="Add with quantity">+qty</button>' : '') +
     '<span class="item-name">' + esc(item.name) + '</span>' +
     '<div class="item-actions">' +
