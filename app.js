@@ -581,6 +581,8 @@ async function confirmEditQty(listId) {
   await changeQty(listId, qty - shoppingList.find(i => i.id === listId)?.qty || 0);
   renderDatabase();
 }
+
+function openAddWithQty(itemId) {
   const item = db.items.find(i => i.id === itemId);
   if (!item) return;
   document.getElementById('generic-modal-content').innerHTML =
