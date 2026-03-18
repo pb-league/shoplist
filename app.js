@@ -308,13 +308,17 @@ function makeCategoryCard(cat, collapsed) {
 
 function renderItemRow(item) {
   const inList   = shoppingList.some(s => s.itemId === item.id);
+  const listItem = shoppingList.find(s => s.itemId === item.id);
   const rowClick = inList
     ? 'removeFromList(\'' + item.id + '\')'
     : 'addToList(\'' + item.id + '\',1)';
+  const qtyBtn = inList
+    ? '<button class="item-qty-btn item-qty-btn--active" onclick="openEditQty(\'' + listItem.id + '\');event.stopPropagation()" title="Change quantity">×' + listItem.qty + '</button>'
+    : '<button class="item-qty-btn" onclick="openAddWithQty(\'' + item.id + '\');event.stopPropagation()" title="Add with quantity">+qty</button>';
   return '<div class="item-row ' + (inList ? 'in-list' : '') + '" id="item-row-' + item.id + '" draggable="true" data-item-id="' + item.id + '" onclick="' + rowClick + '">' +
     '<span class="item-drag-handle" onclick="event.stopPropagation()">⠿</span>' +
     '<span class="item-dot"></span>' +
-    (!inList ? '<button class="item-qty-btn" onclick="openAddWithQty(\'' + item.id + '\');event.stopPropagation()" title="Add with quantity">+qty</button>' : '') +
+    qtyBtn +
     '<span class="item-name">' + esc(item.name) + '</span>' +
     '<div class="item-actions">' +
       '<button class="btn-icon" onclick="deleteItem(\'' + item.id + '\');event.stopPropagation()">🗑</button>' +
@@ -553,7 +557,30 @@ async function addToList(itemId, qty) {
   }
 }
 
-function openAddWithQty(itemId) {
+function openEditQty(listId) {
+  const item = shoppingList.find(i => i.id === listId);
+  if (!item) return;
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">Change Quantity</h2>' +
+    '<p style="font-size:15px;color:var(--ink-mid);margin-bottom:16px;">' + esc(item.name) + '</p>' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">' +
+      '<button class="qty-btn" style="font-size:20px;width:36px;height:36px;background:var(--cream);border:1.5px solid var(--parchment);border-radius:6px;" onclick="adjustModalQty(-1)">−</button>' +
+      '<span id="modal-qty-display" style="font-size:20px;font-weight:700;min-width:32px;text-align:center;">' + item.qty + '</span>' +
+      '<button class="qty-btn" style="font-size:20px;width:36px;height:36px;background:var(--cream);border:1.5px solid var(--parchment);border-radius:6px;" onclick="adjustModalQty(1)">+</button>' +
+    '</div>' +
+    '<div class="modal-actions">' +
+      '<button class="btn-secondary" onclick="closeModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="confirmEditQty(\'' + listId + '\')">Update</button>' +
+    '</div>';
+  openModal();
+}
+
+async function confirmEditQty(listId) {
+  const qty = parseInt(document.getElementById('modal-qty-display').textContent) || 1;
+  closeModal();
+  await changeQty(listId, qty - shoppingList.find(i => i.id === listId)?.qty || 0);
+  renderDatabase();
+}
   const item = db.items.find(i => i.id === itemId);
   if (!item) return;
   document.getElementById('generic-modal-content').innerHTML =
