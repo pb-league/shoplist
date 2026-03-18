@@ -1248,12 +1248,13 @@ function shareList() {
   const url = window.location.origin + window.location.pathname.replace('index.html', '') +
     'share.html?code=' + encodeURIComponent(currentHouseholdCode) +
     '&list=' + encodeURIComponent(activeListName);
-  const qrUrl = 'https://chart.googleapis.com/chart?chs=180x180&cht=qr&choe=UTF-8&chl=' + encodeURIComponent(url);
 
   document.getElementById('generic-modal-content').innerHTML =
     '<h2 class="modal-title">Share "' + esc(activeListName) + '"</h2>' +
     '<p style="color:var(--ink-light);font-size:13px;margin-bottom:16px;">Anyone with this link or QR code can view the list (read-only). No login needed.</p>' +
-    '<img src="' + qrUrl + '" width="180" height="180" style="display:block;margin:0 auto 16px;border-radius:8px;border:1px solid var(--parchment)" alt="QR code" />' +
+    '<div style="display:flex;justify-content:center;margin-bottom:16px;">' +
+      '<div id="qr-code" style="background:#fff;padding:10px;border-radius:8px;border:1px solid var(--parchment);"></div>' +
+    '</div>' +
     '<div style="display:flex;gap:8px;align-items:center;background:var(--cream-dark);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:16px;">' +
       '<span style="flex:1;font-size:12px;word-break:break-all;color:var(--ink-mid)">' + esc(url) + '</span>' +
       '<button class="btn-primary" style="flex-shrink:0;padding:6px 12px;font-size:12px" onclick="copyShareUrl(\'' + esc(url) + '\')">Copy</button>' +
@@ -1262,6 +1263,36 @@ function shareList() {
       '<button class="btn-secondary" onclick="closeModal()">Close</button>' +
     '</div>';
   openModal();
+
+  function renderQR() {
+    const el = document.getElementById('qr-code');
+    if (!el) return;
+    new QRCode(el, {
+      text:  url,
+      width: 180, height: 180,
+      colorDark:  '#2a2118',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  }
+
+  if (typeof QRCode !== 'undefined') {
+    renderQR();
+  } else {
+    const script  = document.createElement('script');
+    script.src    = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    script.onload = renderQR;
+    script.onerror = () => {
+      const el = document.getElementById('qr-code');
+      if (el) {
+        const img = document.createElement('img');
+        img.src    = 'https://chart.googleapis.com/chart?chs=180x180&cht=qr&choe=UTF-8&chl=' + encodeURIComponent(url);
+        img.width  = 180; img.height = 180; img.alt = 'QR code';
+        el.appendChild(img);
+      }
+    };
+    document.head.appendChild(script);
+  }
 }
 
 function copyShareUrl(url) {

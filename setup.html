@@ -8,6 +8,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-ZRSKGRCKM3"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-ZRSKGRCKM3');
+  </script>
   <style>
     body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
     .setup-box { max-width: 480px; width: 100%; }
@@ -34,9 +42,9 @@
     <label class="modal-label">Household Name (optional)</label>
     <input class="setup-input" type="text" id="name" placeholder="e.g. Tucker Family" />
 
-    <label class="modal-label">Existing Google Sheet ID (optional)</label>
+    <label class="modal-label">Existing Google Sheet (optional)</label>
     <input class="setup-input" type="text" id="sheetId" placeholder="Leave blank to create a new sheet automatically" />
-    <p class="setup-note" style="margin-top:-8px;margin-bottom:16px;">The Sheet ID is the long string in the spreadsheet URL. If provided, the sheet must be shared with the script owner's Google account.</p>
+    <p class="setup-note" style="margin-top:-8px;margin-bottom:16px;">Paste either the full spreadsheet URL or just the ID (the long string between /d/ and /edit in the URL). Leave blank to create a new sheet automatically. If provided, the sheet must be shared with the script owner's Google account.</p>
 
     <button class="btn-primary setup-connect" onclick="createHousehold()">Create Household</button>
 
