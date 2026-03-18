@@ -456,6 +456,7 @@ function renderShoppingList() {
 
   updateListBadge();
   initListDragAndDrop();
+  initSwipeToCheck();
 }
 
 function renderListItemCard(item) {
@@ -626,10 +627,25 @@ async function removeFromList(itemId) {
 
 async function removeListItem(listId) {
   const item = shoppingList.find(i => i.id === listId);
+  if (!item) return;
   shoppingList = shoppingList.filter(i => i.id !== listId);
   updateListBadge();
-  if (item && item.itemId) refreshItemRow(item.itemId);
+  if (item.itemId) refreshItemRow(item.itemId);
   renderShoppingList();
+
+  // Undo: re-add to sheet and local state
+  pushUndo('"' + item.name + '" removed', async () => {
+    shoppingList.push(item);
+    shoppingList.sort((a, b) => (a.sortOrder||0) - (b.sortOrder||0));
+    updateListBadge();
+    renderShoppingList();
+    if (item.itemId) refreshItemRow(item.itemId);
+    pendingWrites++;
+    await sheetCall({ action: 'addToList', ...item, listName: activeListName });
+    pendingWrites--;
+  });
+  showToast('"' + item.name + '" removed', 'Undo');
+
   pendingWrites++;
   await sheetCall({ action: 'removeFromList', id: listId, listName: activeListName });
   pendingWrites--;
@@ -638,6 +654,7 @@ async function removeListItem(listId) {
 async function toggleCheck(listId) {
   const item = shoppingList.find(i => i.id === listId);
   if (!item) return;
+  const wasChecked = item.checked;
   item.checked = !item.checked;
   updateListBadge();
   const card = document.getElementById('list-card-' + listId);
@@ -645,6 +662,20 @@ async function toggleCheck(listId) {
     card.classList.toggle('checked', item.checked);
     card.querySelector('.check-box').textContent = item.checked ? '✓' : '';
   }
+
+  if (item.checked) {
+    pushUndo('"' + item.name + '" checked', async () => {
+      item.checked = false;
+      updateListBadge();
+      const c = document.getElementById('list-card-' + listId);
+      if (c) { c.classList.remove('checked'); c.querySelector('.check-box').textContent = ''; }
+      pendingWrites++;
+      await sheetCall({ action: 'updateListItem', id: listId, checked: false });
+      pendingWrites--;
+    });
+    showToast('"' + item.name + '" checked', 'Undo');
+  }
+
   pendingWrites++;
   await sheetCall({ action: 'updateListItem', id: listId, checked: item.checked });
   pendingWrites--;
@@ -1166,6 +1197,82 @@ function printList() {
   win.document.close();
 }
 
+// ---- SWIPE TO CHECK (mobile) ----
+function initSwipeToCheck() {
+  document.querySelectorAll('.list-item-card').forEach(card => {
+    let startX = 0, startY = 0, dx = 0;
+    let swiping = false;
+
+    card.addEventListener('touchstart', e => {
+      startX  = e.touches[0].clientX;
+      startY  = e.touches[0].clientY;
+      dx      = 0;
+      swiping = false;
+    }, { passive: true });
+
+    card.addEventListener('touchmove', e => {
+      dx = e.touches[0].clientX - startX;
+      const dy = Math.abs(e.touches[0].clientY - startY);
+      // Only treat as horizontal swipe if more horizontal than vertical
+      if (Math.abs(dx) > dy && Math.abs(dx) > 10) {
+        swiping = true;
+        const clamp = Math.max(-80, Math.min(80, dx));
+        card.style.transform = 'translateX(' + clamp + 'px)';
+        card.style.transition = 'none';
+        // Color feedback
+        if (dx < -30) card.style.background = 'var(--sage-muted)';
+        else if (dx > 30) card.style.background = 'var(--danger-light)';
+        else card.style.background = '';
+      }
+    }, { passive: true });
+
+    card.addEventListener('touchend', e => {
+      card.style.transition = '';
+      card.style.transform  = '';
+      card.style.background = '';
+      if (!swiping) return;
+      const listId = card.dataset.listId;
+      if (dx < -60) {
+        // Swipe left → check off
+        toggleCheck(listId);
+      } else if (dx > 60) {
+        // Swipe right → delete
+        removeListItem(listId);
+      }
+    }, { passive: true });
+  });
+}
+
+// ---- SHARE LIST ----
+function shareList() {
+  const url = window.location.origin + window.location.pathname.replace('index.html', '') +
+    'share.html?code=' + encodeURIComponent(currentHouseholdCode) +
+    '&list=' + encodeURIComponent(activeListName);
+  const qrUrl = 'https://chart.googleapis.com/chart?chs=180x180&cht=qr&choe=UTF-8&chl=' + encodeURIComponent(url);
+
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">Share "' + esc(activeListName) + '"</h2>' +
+    '<p style="color:var(--ink-light);font-size:13px;margin-bottom:16px;">Anyone with this link or QR code can view the list (read-only). No login needed.</p>' +
+    '<img src="' + qrUrl + '" width="180" height="180" style="display:block;margin:0 auto 16px;border-radius:8px;border:1px solid var(--parchment)" alt="QR code" />' +
+    '<div style="display:flex;gap:8px;align-items:center;background:var(--cream-dark);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:16px;">' +
+      '<span style="flex:1;font-size:12px;word-break:break-all;color:var(--ink-mid)">' + esc(url) + '</span>' +
+      '<button class="btn-primary" style="flex-shrink:0;padding:6px 12px;font-size:12px" onclick="copyShareUrl(\'' + esc(url) + '\')">Copy</button>' +
+    '</div>' +
+    '<div class="modal-actions">' +
+      '<button class="btn-secondary" onclick="closeModal()">Close</button>' +
+    '</div>';
+  openModal();
+}
+
+function copyShareUrl(url) {
+  navigator.clipboard.writeText(url).then(() => {
+    showToast('Link copied!');
+    closeModal();
+  }).catch(() => {
+    showToast('Could not copy — select the URL manually');
+  });
+}
+
 // ---- VIEWS ----
 function switchView(view) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -1206,11 +1313,39 @@ function updateListBadge() {
 function showDbLoading(show) {
   document.getElementById('db-loading').style.display = show ? 'flex' : 'none';
 }
-function showToast(msg) {
+// ---- UNDO ----
+let undoStack  = null;  // { label, fn }
+let undoTimer  = null;
+
+function pushUndo(label, fn) {
+  undoStack = { label, fn };
+  if (undoTimer) clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => { undoStack = null; }, 4000);
+}
+
+async function doUndo() {
+  if (!undoStack) return;
+  const { fn } = undoStack;
+  undoStack = null;
+  if (undoTimer) clearTimeout(undoTimer);
+  hideToast();
+  await fn();
+}
+
+function showToast(msg, undoLabel) {
   const t = document.getElementById('toast');
-  t.textContent = msg;
+  if (undoLabel) {
+    t.innerHTML = msg + ' <button class="toast-undo-btn" onclick="doUndo()">Undo</button>';
+  } else {
+    t.textContent = msg;
+  }
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2600);
+  if (undoTimer) clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => { t.classList.remove('show'); undoStack = null; }, 4000);
+}
+
+function hideToast() {
+  document.getElementById('toast').classList.remove('show');
 }
 function esc(str) {
   return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
