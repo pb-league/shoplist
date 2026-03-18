@@ -231,7 +231,7 @@ button { cursor: pointer; font-family: var(--font-body); }
 .category-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--cream-dark);
   background: var(--cream);
@@ -242,6 +242,7 @@ button { cursor: pointer; font-family: var(--font-body); }
 .category-card.collapsed .category-header { border-bottom: none; padding: 7px 16px; }
 .category-card.collapsed .category-items,
 .category-card.collapsed .category-add-item { display: none; }
+.category-name { flex: 1; }
 .category-collapse-icon {
   font-size: 9px;
   color: var(--ink-light);
@@ -316,6 +317,11 @@ button { cursor: pointer; font-family: var(--font-body); }
   flex-shrink: 0;
 }
 .item-qty-btn:hover { background: var(--sage-light); color: #fff; }
+.item-qty-btn--active {
+  background: var(--sage);
+  color: #fff;
+}
+.item-qty-btn--active:hover { background: var(--sage-light); }
 .add-to-list-btn {
   background: var(--sage-muted);
   color: var(--sage);
@@ -656,7 +662,6 @@ button { cursor: pointer; font-family: var(--font-body); }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---- TOAST ---- */
 .toast {
   position: fixed;
   bottom: 28px;
@@ -673,11 +678,28 @@ button { cursor: pointer; font-family: var(--font-body); }
   z-index: 9999;
   pointer-events: none;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .toast.show {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+  pointer-events: all;
 }
+.toast-undo-btn {
+  background: rgba(255,255,255,0.2);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.toast-undo-btn:hover { background: rgba(255,255,255,0.35); }
 
 /* ---- NOTES ---- */
 .list-notes-area {
