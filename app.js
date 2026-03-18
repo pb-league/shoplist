@@ -5,6 +5,7 @@
 // ---- STATE ----
 let SHEET_URL            = '';   // master script URL — set via window.PANTRY_MASTER_URL
 let currentHouseholdCode = '';
+let householdName        = '';
 let db             = { categories: [], items: [] };
 let shoppingList   = [];
 let previousList   = [];
@@ -31,10 +32,25 @@ window.addEventListener('DOMContentLoaded', () => {
   } else {
     currentHouseholdCode = localStorage.getItem('pantry_household_code') || '';
   }
+  householdName = localStorage.getItem('pantry_household_name') || '';
 
   if (!SHEET_URL) { showToast('Master URL not configured — see config.js'); return; }
 
   if (currentHouseholdCode) {
+    // Refresh household name from master if not cached
+    if (!householdName) {
+      fetch(SHEET_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify({ action: 'resolveCode', code: currentHouseholdCode })
+      }).then(r => r.json()).then(data => {
+        if (data.ok && data.exists) {
+          householdName = data.householdName || currentHouseholdCode;
+          localStorage.setItem('pantry_household_name', householdName);
+          updateUserDisplay();
+        }
+      }).catch(() => {});
+    }
     if (!currentUser) promptForUsername();
     else launchApp();
   }
@@ -93,7 +109,9 @@ async function connectWithCode() {
     return;
   }
   currentHouseholdCode = code;
+  householdName        = data.householdName || code;
   localStorage.setItem('pantry_household_code', code);
+  localStorage.setItem('pantry_household_name', householdName);
   if (!currentUser) promptForUsername();
   else launchApp();
 }
@@ -118,8 +136,13 @@ function launchApp() {
 }
 
 function updateUserDisplay() {
-  const el = document.getElementById('sidebar-username');
-  if (el) el.textContent = currentUser || 'Set name';
+  const name = currentUser || 'Set name';
+  const el   = document.getElementById('sidebar-username');
+  if (el) el.textContent = name;
+  const elm  = document.getElementById('sidebar-username-mobile');
+  if (elm) elm.textContent = name;
+  const hn = document.getElementById('sidebar-household-name');
+  if (hn) hn.textContent = householdName || currentHouseholdCode;
 }
 
 // ---- SHEET API ----
@@ -187,11 +210,12 @@ function startAutoRefresh() {
 
 // ---- LIST SELECTOR ----
 function updateListDropdown() {
-  const sel = document.getElementById('list-selector');
-  if (!sel) return;
-  sel.innerHTML = allListNames.map(n =>
+  const options = allListNames.map(n =>
     '<option value="' + esc(n) + '"' + (n === activeListName ? ' selected' : '') + '>' + esc(n) + '</option>'
   ).join('') + '<option value="__new__">+ New list…</option>';
+  document.querySelectorAll('#list-selector, .mobile-list-selector-row select').forEach(sel => {
+    if (sel) sel.innerHTML = options;
+  });
 }
 
 async function onListSelect(e) {
@@ -239,42 +263,47 @@ function renderDatabase() {
   }
   container.classList.remove('hidden');
   empty.classList.add('hidden');
+
   db.categories.forEach(cat => {
-    const catItems   = db.items.filter(i => i.category === cat.id);
-    const collapsed  = collapsedCats.has(cat.id);
-    const inListCount = catItems.filter(i => shoppingList.some(s => s.itemId === i.id)).length;
-    const card       = document.createElement('div');
-    card.className    = 'category-card' + (collapsed ? ' collapsed' : '');
-    card.id           = 'cat-card-' + cat.id;
-    card.draggable    = true;
-    card.dataset.catId = cat.id;
-    const aisleLabel  = cat.aisle ? '<span class="category-aisle">Aisle ' + esc(cat.aisle) + '</span>' : '';
-    const listBadge   = (collapsed && inListCount > 0)
-      ? '<span class="cat-list-badge">' + inListCount + ' on list</span>' : '';
-    card.innerHTML =
-      '<div class="category-header" onclick="toggleCategory(\'' + cat.id + '\')">' +
-        '<span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>' +
-        '<span class="category-collapse-icon">' + (collapsed ? '▶' : '▼') + '</span>' +
-        '<span class="category-name">' + esc(cat.name) + '</span>' +
-        aisleLabel +
-        listBadge +
-        '<div class="category-actions" onclick="event.stopPropagation()">' +
-          '<button class="btn-icon" title="Edit" onclick="editCategory(\'' + cat.id + '\',\'' + esc(cat.name) + '\',\'' + esc(cat.aisle||'') + '\')">✎</button>' +
-          '<button class="btn-icon" title="Delete" onclick="deleteCategory(\'' + cat.id + '\')">🗑</button>' +
-        '</div>' +
-      '</div>' +
-      '<div class="category-items" id="cat-items-' + cat.id + '">' +
-        (collapsed ? '' : catItems.map(i => renderItemRow(i)).join('')) +
-      '</div>' +
-      (collapsed ? '' :
-        '<div class="category-add-item">' +
-          '<button class="category-add-item-btn" onclick="openAddItem(\'' + cat.id + '\')">+ add item</button>' +
-        '</div>'
-      );
-    container.appendChild(card);
+    container.appendChild(makeCategoryCard(cat, collapsedCats.has(cat.id)));
   });
+
   initCatDragAndDrop();
   initItemDragAndDrop();
+}
+
+function makeCategoryCard(cat, collapsed) {
+  const catItems    = db.items.filter(i => i.category === cat.id);
+  const inListCount = catItems.filter(i => shoppingList.some(s => s.itemId === i.id)).length;
+  const card        = document.createElement('div');
+  card.className    = 'category-card' + (collapsed ? ' collapsed' : '');
+  card.id           = 'cat-card-' + cat.id;
+  card.draggable    = true;
+  card.dataset.catId = cat.id;
+  const aisleLabel  = cat.aisle ? '<span class="category-aisle">Aisle ' + esc(cat.aisle) + '</span>' : '';
+  const listBadge   = (collapsed && inListCount > 0)
+    ? '<span class="cat-list-badge">' + inListCount + ' on list</span>' : '';
+  card.innerHTML =
+    '<div class="category-header" onclick="toggleCategory(\'' + cat.id + '\')">' +
+      '<span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>' +
+      '<span class="category-collapse-icon">' + (collapsed ? '▶' : '▼') + '</span>' +
+      '<span class="category-name">' + esc(cat.name) + '</span>' +
+      aisleLabel +
+      listBadge +
+      '<div class="category-actions" onclick="event.stopPropagation()">' +
+        '<button class="btn-icon" title="Edit" onclick="editCategory(\'' + cat.id + '\',\'' + esc(cat.name) + '\',\'' + esc(cat.aisle||'') + '\')">✎</button>' +
+        '<button class="btn-icon" title="Delete" onclick="deleteCategory(\'' + cat.id + '\')">🗑</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="category-items" id="cat-items-' + cat.id + '">' +
+      (collapsed ? '' : catItems.map(i => renderItemRow(i)).join('')) +
+    '</div>' +
+    (collapsed ? '' :
+      '<div class="category-add-item">' +
+        '<button class="category-add-item-btn" onclick="openAddItem(\'' + cat.id + '\')">+ add item</button>' +
+      '</div>'
+    );
+  return card;
 }
 
 function renderItemRow(item) {
@@ -294,10 +323,8 @@ function renderItemRow(item) {
 }
 
 // ---- CATEGORY DRAG AND DROP ----
-let catDragSrcId = null;
 function initCatDragAndDrop() {
-  const container = document.getElementById('categories-container');
-  container.querySelectorAll('.category-card').forEach(card => {
+  document.querySelectorAll('.category-card').forEach(card => {
     card.addEventListener('dragstart', e => {
       catDragSrcId = card.dataset.catId;
       card.classList.add('dragging');
@@ -305,12 +332,12 @@ function initCatDragAndDrop() {
     });
     card.addEventListener('dragend', () => {
       card.classList.remove('dragging');
-      container.querySelectorAll('.category-card').forEach(c => c.classList.remove('drag-over'));
+      document.querySelectorAll('.category-card').forEach(c => c.classList.remove('drag-over'));
     });
     card.addEventListener('dragover', e => {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
-      container.querySelectorAll('.category-card').forEach(c => c.classList.remove('drag-over'));
+      document.querySelectorAll('.category-card').forEach(c => c.classList.remove('drag-over'));
       if (card.dataset.catId !== catDragSrcId) card.classList.add('drag-over');
     });
     card.addEventListener('drop', e => {
@@ -739,6 +766,7 @@ function openListOptionsModal() {
     '<input class="modal-input" id="rename-list-input" value="' + esc(activeListName) + '" />' +
     '<div class="modal-actions" style="flex-direction:column;gap:8px;margin-top:20px;">' +
       '<button class="btn-primary" style="width:100%" onclick="doRenameList()">Rename</button>' +
+      '<button class="btn-secondary" style="width:100%" onclick="closeModalAndPrint()">🖨 Print List</button>' +
       '<button class="btn-danger"  style="width:100%" onclick="doDeleteList()">Delete this list</button>' +
       '<button class="btn-secondary" style="width:100%" onclick="closeModal()">Cancel</button>' +
     '</div>';
@@ -1058,14 +1086,67 @@ async function loadNote(silent) {
   } catch (e) {}
 }
 
+// ---- PRINT LIST ----
+function closeModalAndPrint() {
+  closeModal();
+  setTimeout(printList, 100);
+}
+
+function printList() {
+  const catOrder = db.categories.map(c => c.name);
+  const byCategory = {};
+  shoppingList.filter(i => !i.checked).forEach(item => {
+    const cat = item.category || 'Other';
+    if (!byCategory[cat]) byCategory[cat] = [];
+    byCategory[cat].push(item);
+  });
+  const sortedCats = Object.keys(byCategory).sort((a, b) => {
+    const ai = catOrder.indexOf(a), bi = catOrder.indexOf(b);
+    if (ai === -1 && bi === -1) return a.localeCompare(b);
+    if (ai === -1) return 1; if (bi === -1) return -1;
+    return ai - bi;
+  });
+
+  const date = new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+  const sections = sortedCats.map(catName => {
+    const cat      = db.categories.find(c => c.name === catName);
+    const aisle    = cat && cat.aisle ? ' <span style="font-size:11px;color:#888;font-weight:400;">· Aisle ' + catName + '</span>' : '';
+    const items    = byCategory[catName].map(i =>
+      '<li>' + i.name + (i.qty > 1 ? ' <span style="color:#888">×' + i.qty + '</span>' : '') +
+      (i.note ? ' <span style="color:#aaa;font-style:italic;font-size:11px;">— ' + i.note + '</span>' : '') + '</li>'
+    ).join('');
+    return '<div style="margin-bottom:16px"><strong style="font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#555">' + catName + aisle + '</strong><ul style="margin:4px 0 0 16px;padding:0;list-style:disc">' + items + '</ul></div>';
+  }).join('');
+
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><title>Shopping List — ${householdName || activeListName}</title>
+    <style>
+      body { font-family: Georgia, serif; max-width: 600px; margin: 40px auto; padding: 0 20px; color: #222; }
+      h1 { font-size: 28px; margin-bottom: 2px; }
+      .household { font-size: 14px; color: #888; margin-bottom: 2px; }
+      .meta { font-size: 13px; color: #aaa; margin-bottom: 28px; }
+      ul { line-height: 1.8; }
+      @media print { body { margin: 20px; } }
+    </style></head><body>
+    ${householdName ? '<div class="household">🛒 ' + householdName + '</div>' : ''}
+    <h1>${activeListName}</h1>
+    <div class="meta">${date} · ${shoppingList.filter(i => !i.checked).length} items</div>
+    ${sections}
+    <script>window.onload = function(){ window.print(); }<\/script>
+  </body></html>`);
+  win.document.close();
+}
+
 // ---- VIEWS ----
 function switchView(view) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.bottom-tab').forEach(b => b.classList.remove('active'));
   const viewEl = document.getElementById('view-' + view);
   viewEl.classList.remove('hidden');
   viewEl.classList.add('active');
-  document.querySelector('[data-view="' + view + '"]').classList.add('active');
+  document.querySelector('[data-view="' + view + '"]')?.classList.add('active');
+  document.querySelectorAll('.bottom-tab[data-view="' + view + '"]').forEach(b => b.classList.add('active'));
   if (view === 'list') {
     document.getElementById('list-loading').classList.add('hidden');
     renderShoppingList();
@@ -1087,10 +1168,11 @@ document.getElementById('generic-modal').addEventListener('click', e => {
 
 // ---- UI HELPERS ----
 function updateListBadge() {
-  const badge     = document.getElementById('list-badge');
   const unchecked = shoppingList.filter(i => !i.checked).length;
-  badge.textContent = unchecked;
-  badge.classList.toggle('hidden', unchecked === 0);
+  ['list-badge', 'list-badge-mobile'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = unchecked; el.classList.toggle('hidden', unchecked === 0); }
+  });
 }
 function showDbLoading(show) {
   document.getElementById('db-loading').style.display = show ? 'flex' : 'none';

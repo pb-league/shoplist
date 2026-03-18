@@ -47,8 +47,15 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <span class="sidebar-logo">🛒</span>
-        <span class="sidebar-title">Pantry</span>
+        <div>
+          <span class="sidebar-title">Pantry</span>
+          <div id="sidebar-household-name" class="sidebar-household-name"></div>
+        </div>
       </div>
+      <!-- Mobile: user button in top bar -->
+      <button class="sidebar-topbar-user" style="display:none" onclick="changeUsername()">
+        👤 <span id="sidebar-username-mobile"></span>
+      </button>
       <nav class="sidebar-nav">
         <button class="nav-btn active" data-view="database" onclick="switchView('database')">
           <span class="nav-icon">📦</span> Item Database
@@ -101,6 +108,11 @@
         <div class="view-header">
           <div>
             <h2 class="view-title">Shopping List</h2>
+            <!-- Mobile list selector (desktop uses sidebar) -->
+            <div class="mobile-list-selector-row" style="display:none">
+              <select class="sidebar-list-select" onchange="onListSelect(event)"></select>
+              <button class="btn-icon sidebar-list-options" onclick="openListOptionsModal()">⚙</button>
+            </div>
           </div>
           <div class="view-actions">
             <button class="btn-secondary" onclick="openAddQuickItem()">+ Quick Add</button>
@@ -127,6 +139,23 @@
       </section>
 
     </main>
+  </div>
+
+  <!-- MOBILE BOTTOM TAB BAR (hidden on desktop via CSS) -->
+  <div class="bottom-tab-bar" style="display:none">
+    <button class="bottom-tab active" data-view="database" onclick="switchView('database')">
+      <span class="bottom-tab-icon">📦</span>
+      <span>Database</span>
+    </button>
+    <button class="bottom-tab" data-view="list" onclick="switchView('list')">
+      <span class="bottom-tab-icon">📋</span>
+      <span>List</span>
+      <span id="list-badge-mobile" class="badge hidden">0</span>
+    </button>
+    <button class="bottom-tab" onclick="openSetup()">
+      <span class="bottom-tab-icon">⚙️</span>
+      <span>Settings</span>
+    </button>
   </div>
 
   <script src="config.js"></script>
