@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pantry — Create Household</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .setup-box { max-width: 480px; width: 100%; }
+    .result-box { margin-top: 20px; padding: 16px; border-radius: 8px; font-size: 14px; line-height: 1.6; }
+    .result-box.success { background: var(--sage-muted); color: var(--sage); }
+    .result-box.error   { background: var(--danger-light); color: var(--danger); }
+    .result-code { font-size: 28px; font-weight: 700; font-family: monospace; letter-spacing: 2px; margin: 8px 0; }
+    .result-link { word-break: break-all; font-size: 12px; color: var(--ink-light); margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="modal-box setup-box">
+    <div class="setup-logo">🛒</div>
+    <h1 class="setup-title">Create Household</h1>
+    <p class="setup-sub">Set up a new Pantry household. Requires the admin password.</p>
+
+    <label class="modal-label">Admin Password</label>
+    <input class="setup-input" type="password" id="password" placeholder="Admin password" />
+
+    <label class="modal-label">Household Code</label>
+    <input class="setup-input" type="text" id="code" placeholder="e.g. tucker1, smith42…" autocapitalize="off" autocomplete="off" />
+    <p class="setup-note" style="margin-top:-8px;margin-bottom:12px;">This is what family members will type to connect. Lowercase, no spaces.</p>
+
+    <label class="modal-label">Household Name (optional)</label>
+    <input class="setup-input" type="text" id="name" placeholder="e.g. Tucker Family" />
+
+    <label class="modal-label">Existing Google Sheet ID (optional)</label>
+    <input class="setup-input" type="text" id="sheetId" placeholder="Leave blank to create a new sheet automatically" />
+    <p class="setup-note" style="margin-top:-8px;margin-bottom:16px;">The Sheet ID is the long string in the spreadsheet URL. If provided, the sheet must be shared with the script owner's Google account.</p>
+
+    <button class="btn-primary setup-connect" onclick="createHousehold()">Create Household</button>
+
+    <div id="result" style="display:none"></div>
+  </div>
+
+  <script src="config.js"></script>
+  <script>
+    async function createHousehold() {
+      const password      = document.getElementById('password').value;
+      const code          = document.getElementById('code').value.trim().toLowerCase();
+      const householdName = document.getElementById('name').value.trim();
+      const spreadsheetId = document.getElementById('sheetId').value.trim();
+      const resultEl      = document.getElementById('result');
+
+      if (!password || !code) {
+        showResult('error', 'Password and household code are required.');
+        return;
+      }
+      if (/\s/.test(code)) {
+        showResult('error', 'Household code cannot contain spaces.');
+        return;
+      }
+
+      showResult('', 'Creating household…');
+      resultEl.style.display = 'block';
+      resultEl.className = 'result-box';
+      resultEl.textContent = 'Creating…';
+
+      try {
+        const res  = await fetch(window.PANTRY_MASTER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'createHousehold', password, code, householdName, spreadsheetId })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showResult('success',
+            '✓ Household created!\n\nCode: ' + data.code +
+            (data.spreadsheetUrl ? '\n\nSpreadsheet: ' + data.spreadsheetUrl : '')
+          );
+        } else {
+          showResult('error', '✕ ' + (data.error || 'Unknown error'));
+        }
+      } catch (e) {
+        showResult('error', 'Could not reach the master script. Check config.js.');
+      }
+    }
+
+    function showResult(type, msg) {
+      const el = document.getElementById('result');
+      el.style.display = 'block';
+      el.className = 'result-box' + (type ? ' ' + type : '');
+      // Format nicely
+      const lines = msg.split('\n');
+      el.innerHTML = lines.map((l, i) => {
+        if (i === 0) return '<strong>' + l + '</strong>';
+        if (l.startsWith('Code:')) return '<div class="result-code">' + l.replace('Code: ','') + '</div>';
+        if (l.startsWith('Spreadsheet:')) return '<div class="result-link">📊 <a href="' + l.replace('Spreadsheet: ','') + '" target="_blank">Open Spreadsheet</a></div>';
+        return l ? '<div>' + l + '</div>' : '';
+      }).join('');
+    }
+  </script>
+</body>
+</html>

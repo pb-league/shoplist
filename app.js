@@ -3,53 +3,99 @@
 // ============================================================
 
 // ---- STATE ----
-let SHEET_URL    = '';
-let db           = { categories: [], items: [] };
-let shoppingList = [];
-let previousList = [];
-let refreshTimer = null;
+let SHEET_URL            = '';   // master script URL — set via window.PANTRY_MASTER_URL
+let currentHouseholdCode = '';
+let db             = { categories: [], items: [] };
+let shoppingList   = [];
+let previousList   = [];
+let refreshTimer   = null;
+let activeListName = 'Main';
+let allListNames   = ['Main'];
+let noteDebounce   = null;
+let pendingWrites  = 0;
+let currentUser    = '';
+let listDragSrcId  = null;
 
 // ---- INIT ----
 window.addEventListener('DOMContentLoaded', () => {
-  const savedCode = localStorage.getItem('pantry_household_code');
-  if (savedCode) {
-    resolveCode(savedCode).then(url => {
-      if (url) {
-        SHEET_URL = url;
-        launchApp();
-      } else {
-        // Saved code no longer valid — show setup
-        localStorage.removeItem('pantry_household_code');
-        showSetup();
-      }
-    });
+  SHEET_URL            = window.PANTRY_MASTER_URL || '';
+  currentUser          = localStorage.getItem('pantry_user') || '';
+  activeListName       = localStorage.getItem('pantry_active_list') || 'Main';
+
+  // Support ?code=tucker1 or legacy ?url=tucker1 in the URL
+  const params     = new URLSearchParams(window.location.search);
+  const paramCode  = params.get('code') || params.get('url');
+  if (paramCode) {
+    currentHouseholdCode = paramCode.toLowerCase();
+    localStorage.setItem('pantry_household_code', currentHouseholdCode);
+  } else {
+    currentHouseholdCode = localStorage.getItem('pantry_household_code') || '';
+  }
+
+  if (!SHEET_URL) { showToast('Master URL not configured — see config.js'); return; }
+
+  if (currentHouseholdCode) {
+    if (!currentUser) promptForUsername();
+    else launchApp();
+  }
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 });
+
+// ---- USERNAME ----
+function promptForUsername() {
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">Who are you?</h2>' +
+    '<p style="color:var(--ink-light);font-size:14px;margin-bottom:16px;">Enter your name so others can see who added items to the list.</p>' +
+    '<input class="modal-input" id="username-input" placeholder="e.g. Mom, Dad, Alex…" autofocus />' +
+    '<div class="modal-actions">' +
+      '<button class="btn-primary" onclick="saveUsername()">Continue</button>' +
+    '</div>';
+  document.getElementById('generic-modal').classList.add('active');
+}
+
+function saveUsername() {
+  const name = document.getElementById('username-input').value.trim();
+  if (!name) { showToast('Please enter your name'); return; }
+  currentUser = name;
+  localStorage.setItem('pantry_user', currentUser);
+  closeModal();
+  launchApp();
+}
+
+function changeUsername() {
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">Change Your Name</h2>' +
+    '<input class="modal-input" id="username-input" value="' + esc(currentUser) + '" autofocus />' +
+    '<div class="modal-actions">' +
+      '<button class="btn-secondary" onclick="closeModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="saveUsername()">Save</button>' +
+    '</div>';
+  openModal();
+}
 
 // ---- SETUP ----
 async function connectWithCode() {
   const code = document.getElementById('household-code-input').value.trim().toLowerCase();
   if (!code) { showToast('Please enter your household code'); return; }
   showToast('Looking up code…');
-  const url = await resolveCode(code);
-  if (!url) {
+  // Verify code exists via master script
+  const res = await fetch(SHEET_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ action: 'resolveCode', code })
+  });
+  const data = await res.json().catch(() => ({ ok: false }));
+  if (!data.ok || !data.exists) {
     showToast('Code not found — check with whoever set up your Pantry');
     return;
   }
-  SHEET_URL = url;
+  currentHouseholdCode = code;
   localStorage.setItem('pantry_household_code', code);
-  launchApp();
-}
-
-async function resolveCode(code) {
-  try {
-    const res  = await fetch('households.json?_=' + Date.now());
-    const map  = await res.json();
-    return map[code] || null;
-  } catch (e) {
-    showToast('Could not load household list');
-    return null;
-  }
+  if (!currentUser) promptForUsername();
+  else launchApp();
 }
 
 function showSetup() {
@@ -58,8 +104,7 @@ function showSetup() {
 }
 
 function openSetup() {
-  const code = localStorage.getItem('pantry_household_code') || '';
-  document.getElementById('household-code-input').value = code;
+  document.getElementById('household-code-input').value = currentHouseholdCode;
   document.getElementById('setup-modal').classList.add('active');
 }
 
@@ -67,8 +112,14 @@ function launchApp() {
   document.getElementById('setup-modal').classList.remove('active');
   document.getElementById('app').classList.remove('hidden');
   document.querySelectorAll('.view').forEach(v => v.classList.remove('hidden'));
+  updateUserDisplay();
   loadAll();
   startAutoRefresh();
+}
+
+function updateUserDisplay() {
+  const el = document.getElementById('sidebar-username');
+  if (el) el.textContent = currentUser || 'Set name';
 }
 
 // ---- SHEET API ----
@@ -76,24 +127,28 @@ async function sheetCall(payload) {
   const res  = await fetch(SHEET_URL, {
     method:  'POST',
     headers: { 'Content-Type': 'text/plain' },
-    body:    JSON.stringify(payload)
+    body:    JSON.stringify({ ...payload, householdCode: currentHouseholdCode })
   });
   const text = await res.text();
   try { return JSON.parse(text); }
   catch { return { ok: false, error: text }; }
 }
 
-// ---- LOAD ALL (single round trip) ----
+// ---- LOAD ALL ----
 async function loadAll() {
   showDbLoading(true);
   try {
-    const result = await sheetCall({ action: 'getAll' });
+    const result = await sheetCall({ action: 'getAll', listName: activeListName });
     if (result.ok) {
       db.categories = result.categories || [];
       db.items      = result.items      || [];
       shoppingList  = result.list       || [];
+      allListNames  = result.listNames  || [activeListName];
+      if (!allListNames.includes(activeListName)) allListNames.push(activeListName);
       updateListBadge();
+      updateListDropdown();
       renderDatabase();
+      setNote(result.note || '');
       if (document.getElementById('view-list').classList.contains('active')) renderShoppingList();
     } else {
       showToast('Error loading data: ' + (result.error || 'Unknown'));
@@ -104,29 +159,12 @@ async function loadAll() {
   showDbLoading(false);
 }
 
-// ---- LOAD DB ONLY ----
-async function loadDatabase() {
-  showDbLoading(true);
+// ---- LOAD LIST ----
+async function loadList(silent, force) {
   try {
-    const result = await sheetCall({ action: 'getData' });
+    const result = await sheetCall({ action: 'getList', listName: activeListName });
     if (result.ok) {
-      db.categories = result.categories || [];
-      db.items      = result.items      || [];
-      renderDatabase();
-    } else {
-      showToast('Error loading data: ' + (result.error || 'Unknown'));
-    }
-  } catch (e) {
-    showToast('Could not reach your Sheet. Check your URL in Settings.');
-  }
-  showDbLoading(false);
-}
-
-// ---- LOAD LIST FROM SHEET ----
-async function loadList(silent) {
-  try {
-    const result = await sheetCall({ action: 'getList' });
-    if (result.ok) {
+      if (!force && result.list.length === 0 && shoppingList.length > 0) return;
       shoppingList = result.list || [];
       updateListBadge();
       if (document.getElementById('view-list').classList.contains('active')) renderShoppingList();
@@ -140,7 +178,53 @@ async function loadList(silent) {
 // ---- AUTO REFRESH ----
 function startAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = setInterval(() => loadList(true), 60000);
+  refreshTimer = setInterval(() => {
+    if (pendingWrites > 0) return;
+    loadList(true);
+    loadNote(true);
+  }, 60000);
+}
+
+// ---- LIST SELECTOR ----
+function updateListDropdown() {
+  const sel = document.getElementById('list-selector');
+  if (!sel) return;
+  sel.innerHTML = allListNames.map(n =>
+    '<option value="' + esc(n) + '"' + (n === activeListName ? ' selected' : '') + '>' + esc(n) + '</option>'
+  ).join('') + '<option value="__new__">+ New list…</option>';
+}
+
+async function onListSelect(e) {
+  const val = e.target.value;
+  if (val === '__new__') { e.target.value = activeListName; openNewNamedListModal(); return; }
+  await switchList(val);
+}
+
+async function switchList(name) {
+  activeListName = name;
+  localStorage.setItem('pantry_active_list', activeListName);
+  shoppingList = []; // clear immediately so old list doesn't show
+  updateListBadge();
+  if (document.getElementById('view-list').classList.contains('active')) renderShoppingList();
+  updateListDropdown();
+  showToast('Loading "' + name + '"…');
+  await loadList(false, true);
+  await loadNote(true);
+  renderDatabase();
+}
+
+// ---- COLLAPSED CATEGORIES ----
+let collapsedCats = new Set(JSON.parse(localStorage.getItem('pantry_collapsed_cats') || '[]'));
+
+function saveCollapsedCats() {
+  localStorage.setItem('pantry_collapsed_cats', JSON.stringify([...collapsedCats]));
+}
+
+function toggleCategory(catId) {
+  if (collapsedCats.has(catId)) collapsedCats.delete(catId);
+  else collapsedCats.add(catId);
+  saveCollapsedCats();
+  renderDatabase();
 }
 
 // ---- RENDER DATABASE ----
@@ -148,7 +232,6 @@ function renderDatabase() {
   const container = document.getElementById('categories-container');
   const empty     = document.getElementById('db-empty');
   container.innerHTML = '';
-
   if (db.categories.length === 0) {
     container.classList.add('hidden');
     empty.classList.remove('hidden');
@@ -156,65 +239,71 @@ function renderDatabase() {
   }
   container.classList.remove('hidden');
   empty.classList.add('hidden');
-
   db.categories.forEach(cat => {
-    const catItems = db.items.filter(i => i.category === cat.id);
-    const card     = document.createElement('div');
-    card.className  = 'category-card';
-    card.id         = 'cat-card-' + cat.id;
-    card.draggable  = true;
+    const catItems   = db.items.filter(i => i.category === cat.id);
+    const collapsed  = collapsedCats.has(cat.id);
+    const inListCount = catItems.filter(i => shoppingList.some(s => s.itemId === i.id)).length;
+    const card       = document.createElement('div');
+    card.className    = 'category-card' + (collapsed ? ' collapsed' : '');
+    card.id           = 'cat-card-' + cat.id;
+    card.draggable    = true;
     card.dataset.catId = cat.id;
-    const aisleLabel = cat.aisle ? '<span class="category-aisle">Aisle ' + esc(cat.aisle) + '</span>' : '';
-    card.innerHTML = `
-      <div class="category-header">
-        <span class="drag-handle" title="Drag to reorder">⠿</span>
-        <span class="category-name">${esc(cat.name)}</span>
-        ${aisleLabel}
-        <div class="category-actions">
-          <button class="btn-icon" title="Edit" onclick="editCategory('${cat.id}','${esc(cat.name)}','${esc(cat.aisle || '')}')">✎</button>
-          <button class="btn-icon" title="Delete" onclick="deleteCategory('${cat.id}')">🗑</button>
-        </div>
-      </div>
-      <div class="category-items" id="cat-items-${cat.id}">
-        ${catItems.map(i => renderItemRow(i)).join('')}
-      </div>
-      <div class="category-add-item">
-        <button class="category-add-item-btn" onclick="openAddItem('${cat.id}')">+ add item</button>
-      </div>
-    `;
+    const aisleLabel  = cat.aisle ? '<span class="category-aisle">Aisle ' + esc(cat.aisle) + '</span>' : '';
+    const listBadge   = (collapsed && inListCount > 0)
+      ? '<span class="cat-list-badge">' + inListCount + ' on list</span>' : '';
+    card.innerHTML =
+      '<div class="category-header" onclick="toggleCategory(\'' + cat.id + '\')">' +
+        '<span class="drag-handle" title="Drag to reorder" onclick="event.stopPropagation()">⠿</span>' +
+        '<span class="category-collapse-icon">' + (collapsed ? '▶' : '▼') + '</span>' +
+        '<span class="category-name">' + esc(cat.name) + '</span>' +
+        aisleLabel +
+        listBadge +
+        '<div class="category-actions" onclick="event.stopPropagation()">' +
+          '<button class="btn-icon" title="Edit" onclick="editCategory(\'' + cat.id + '\',\'' + esc(cat.name) + '\',\'' + esc(cat.aisle||'') + '\')">✎</button>' +
+          '<button class="btn-icon" title="Delete" onclick="deleteCategory(\'' + cat.id + '\')">🗑</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="category-items" id="cat-items-' + cat.id + '">' +
+        (collapsed ? '' : catItems.map(i => renderItemRow(i)).join('')) +
+      '</div>' +
+      (collapsed ? '' :
+        '<div class="category-add-item">' +
+          '<button class="category-add-item-btn" onclick="openAddItem(\'' + cat.id + '\')">+ add item</button>' +
+        '</div>'
+      );
     container.appendChild(card);
   });
-
-  initDragAndDrop();
+  initCatDragAndDrop();
+  initItemDragAndDrop();
 }
 
 function renderItemRow(item) {
-  const inList = shoppingList.some(s => s.itemId === item.id);
+  const inList   = shoppingList.some(s => s.itemId === item.id);
   const dotClick = inList
     ? 'removeFromList(\'' + item.id + '\');event.stopPropagation()'
-    : 'addToList(\'' + item.id + '\');event.stopPropagation()';
-  return `
-    <div class="item-row ${inList ? 'in-list' : ''}" id="item-row-${item.id}">
-      <span class="item-dot" title="${inList ? 'Remove from list' : 'Add to list'}" onclick="${dotClick}"></span>
-      <span class="item-name">${esc(item.name)}</span>
-      <div class="item-actions">
-        <button class="btn-icon" onclick="deleteItem('${item.id}');event.stopPropagation()">🗑</button>
-      </div>
-    </div>`;
+    : 'addToList(\'' + item.id + '\',1);event.stopPropagation()';
+  return '<div class="item-row ' + (inList ? 'in-list' : '') + '" id="item-row-' + item.id + '" draggable="true" data-item-id="' + item.id + '">' +
+    '<span class="item-drag-handle">⠿</span>' +
+    '<span class="item-dot" title="' + (inList ? 'Remove from list' : 'Add to list (qty 1)') + '" onclick="' + dotClick + '"></span>' +
+    (!inList ? '<button class="item-qty-btn" onclick="openAddWithQty(\'' + item.id + '\');event.stopPropagation()" title="Add with quantity">+qty</button>' : '') +
+    '<span class="item-name">' + esc(item.name) + '</span>' +
+    '<div class="item-actions">' +
+      '<button class="btn-icon" onclick="deleteItem(\'' + item.id + '\');event.stopPropagation()">🗑</button>' +
+    '</div>' +
+  '</div>';
 }
 
-// ---- DRAG AND DROP (category reorder) ----
-let dragSrcId = null;
-
-function initDragAndDrop() {
+// ---- CATEGORY DRAG AND DROP ----
+let catDragSrcId = null;
+function initCatDragAndDrop() {
   const container = document.getElementById('categories-container');
   container.querySelectorAll('.category-card').forEach(card => {
     card.addEventListener('dragstart', e => {
-      dragSrcId = card.dataset.catId;
+      catDragSrcId = card.dataset.catId;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
     });
-    card.addEventListener('dragend', e => {
+    card.addEventListener('dragend', () => {
       card.classList.remove('dragging');
       container.querySelectorAll('.category-card').forEach(c => c.classList.remove('drag-over'));
     });
@@ -222,27 +311,71 @@ function initDragAndDrop() {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       container.querySelectorAll('.category-card').forEach(c => c.classList.remove('drag-over'));
-      if (card.dataset.catId !== dragSrcId) card.classList.add('drag-over');
+      if (card.dataset.catId !== catDragSrcId) card.classList.add('drag-over');
     });
     card.addEventListener('drop', e => {
       e.preventDefault();
-      if (!dragSrcId || card.dataset.catId === dragSrcId) return;
+      if (!catDragSrcId || card.dataset.catId === catDragSrcId) return;
       card.classList.remove('drag-over');
-
-      // Reorder db.categories array
-      const srcIdx  = db.categories.findIndex(c => c.id === dragSrcId);
+      const srcIdx  = db.categories.findIndex(c => c.id === catDragSrcId);
       const destIdx = db.categories.findIndex(c => c.id === card.dataset.catId);
       const [moved] = db.categories.splice(srcIdx, 1);
       db.categories.splice(destIdx, 0, moved);
-
       renderDatabase();
-      // Persist new order
       sheetCall({ action: 'reorderCategories', orderedIds: db.categories.map(c => c.id) });
     });
   });
 }
 
-// ---- RENDER SHOPPING LIST ----
+// ---- ITEM DRAG AND DROP (within category) ----
+let itemDragSrcId  = null;
+let itemDragCatId  = null;
+
+function initItemDragAndDrop() {
+  document.querySelectorAll('.category-items').forEach(container => {
+    container.querySelectorAll('.item-row').forEach(row => {
+      row.addEventListener('dragstart', e => {
+        itemDragSrcId = row.dataset.itemId;
+        itemDragCatId = row.closest('.category-card').dataset.catId;
+        row.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.stopPropagation(); // don't trigger category drag
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('dragging');
+        document.querySelectorAll('.item-row').forEach(r => r.classList.remove('drag-over'));
+      });
+      row.addEventListener('dragover', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (row.dataset.itemId === itemDragSrcId) return;
+        document.querySelectorAll('.item-row').forEach(r => r.classList.remove('drag-over'));
+        row.classList.add('drag-over');
+      });
+      row.addEventListener('drop', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!itemDragSrcId || row.dataset.itemId === itemDragSrcId) return;
+        row.classList.remove('drag-over');
+        // Only reorder within the same category
+        const destCatId = row.closest('.category-card').dataset.catId;
+        if (destCatId !== itemDragCatId) return;
+        const catItems  = db.items.filter(i => i.category === itemDragCatId);
+        const srcIdx    = catItems.findIndex(i => i.id === itemDragSrcId);
+        const destIdx   = catItems.findIndex(i => i.id === row.dataset.itemId);
+        if (srcIdx === -1 || destIdx === -1) return;
+        // Reorder in db.items
+        const allSrcIdx  = db.items.findIndex(i => i.id === itemDragSrcId);
+        const allDestIdx = db.items.findIndex(i => i.id === row.dataset.itemId);
+        const [moved] = db.items.splice(allSrcIdx, 1);
+        db.items.splice(allDestIdx, 0, moved);
+        renderDatabase();
+        // Persist new item order
+        sheetCall({ action: 'reorderItems', categoryId: itemDragCatId, orderedIds: db.items.filter(i => i.category === itemDragCatId).map(i => i.id) });
+      });
+    });
+  });
+}
 function renderShoppingList() {
   const container = document.getElementById('list-container');
   const empty     = document.getElementById('list-empty');
@@ -258,72 +391,133 @@ function renderShoppingList() {
   container.classList.remove('hidden');
   empty.classList.add('hidden');
 
-  // Group by category, sorted by db.categories sortOrder
-  const catOrder = db.categories.map(c => c.name);
+  const catOrder   = db.categories.map(c => c.name);
   const byCategory = {};
   shoppingList.forEach(item => {
     const catName = item.category || 'Other';
     if (!byCategory[catName]) byCategory[catName] = [];
     byCategory[catName].push(item);
   });
-
-  // Sort groups: known categories first (by db order), then unknowns alphabetically
+  // Each category's items are already sorted by sortOrder from the sheet
   const sortedCatNames = Object.keys(byCategory).sort((a, b) => {
-    const ai = catOrder.indexOf(a);
-    const bi = catOrder.indexOf(b);
+    const ai = catOrder.indexOf(a), bi = catOrder.indexOf(b);
     if (ai === -1 && bi === -1) return a.localeCompare(b);
-    if (ai === -1) return 1;
-    if (bi === -1) return -1;
+    if (ai === -1) return 1; if (bi === -1) return -1;
     return ai - bi;
   });
 
   sortedCatNames.forEach(catName => {
-    const cat     = db.categories.find(c => c.name === catName);
+    const cat      = db.categories.find(c => c.name === catName);
     const aisleTag = cat && cat.aisle ? ' <span class="list-aisle-tag">Aisle ' + esc(cat.aisle) + '</span>' : '';
-    const section = document.createElement('div');
+    const section  = document.createElement('div');
+    section.className = 'list-section';
     section.innerHTML =
       '<div class="list-section-header">' +
         '<span class="list-section-title">' + esc(catName) + '</span>' + aisleTag +
-      '</div>' +
-      byCategory[catName].map(i => renderListItemCard(i)).join('');
+      '</div>';
+    byCategory[catName].forEach(item => {
+      const card = document.createElement('div');
+      card.innerHTML = renderListItemCard(item);
+      section.appendChild(card.firstElementChild);
+    });
     container.appendChild(section);
   });
 
   updateListBadge();
+  initListDragAndDrop();
 }
 
 function renderListItemCard(item) {
-  return '<div class="list-item-card ' + (item.checked ? 'checked' : '') + '" id="list-card-' + item.id + '">' +
+  const addedByTag = item.addedBy ? '<span class="list-item-addedby">' + esc(item.addedBy) + '</span>' : '';
+  const notePreview = item.note ? '<div class="list-item-note-preview">' + esc(item.note) + '</div>' : '';
+  return '<div class="list-item-card ' + (item.checked ? 'checked' : '') + '" id="list-card-' + item.id + '" draggable="true" data-list-id="' + item.id + '">' +
+    '<span class="list-drag-handle">⠿</span>' +
     '<div class="check-box" onclick="toggleCheck(\'' + item.id + '\')">' + (item.checked ? '✓' : '') + '</div>' +
-    '<span class="list-item-name">' + esc(item.name) + '</span>' +
+    '<div class="list-item-body">' +
+      '<div class="list-item-main">' +
+        '<span class="list-item-name">' + esc(item.name) + '</span>' +
+        addedByTag +
+      '</div>' +
+      notePreview +
+    '</div>' +
     '<div class="qty-control">' +
       '<button class="qty-btn" onclick="changeQty(\'' + item.id + '\',-1)">−</button>' +
       '<span class="qty-display" id="qty-' + item.id + '">' + item.qty + '</span>' +
       '<button class="qty-btn" onclick="changeQty(\'' + item.id + '\',1)">+</button>' +
     '</div>' +
+    '<button class="list-note-btn" title="Add note" onclick="openItemNote(\'' + item.id + '\')">💬</button>' +
     '<button class="list-delete-btn" onclick="removeListItem(\'' + item.id + '\')">✕</button>' +
   '</div>';
 }
 
+// ---- LIST ITEM DRAG AND DROP ----
+function initListDragAndDrop() {
+  const container = document.getElementById('list-container');
+  container.querySelectorAll('.list-item-card').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      listDragSrcId = card.dataset.listId;
+      card.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.stopPropagation();
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      container.querySelectorAll('.list-item-card').forEach(c => c.classList.remove('drag-over'));
+    });
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+      container.querySelectorAll('.list-item-card').forEach(c => c.classList.remove('drag-over'));
+      if (card.dataset.listId !== listDragSrcId) card.classList.add('drag-over');
+    });
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!listDragSrcId || card.dataset.listId === listDragSrcId) return;
+      card.classList.remove('drag-over');
+      const srcIdx  = shoppingList.findIndex(i => i.id === listDragSrcId);
+      const destIdx = shoppingList.findIndex(i => i.id === card.dataset.listId);
+      if (srcIdx === -1 || destIdx === -1) return;
+      const [moved] = shoppingList.splice(srcIdx, 1);
+      shoppingList.splice(destIdx, 0, moved);
+      // Update sortOrder in memory
+      shoppingList.forEach((item, idx) => item.sortOrder = idx);
+      renderShoppingList();
+      pendingWrites++;
+      sheetCall({ action: 'reorderList', listName: activeListName, orderedIds: shoppingList.map(i => i.id) })
+        .then(() => pendingWrites--);
+    });
+  });
+}
+
 // ---- LIST ACTIONS ----
-async function addToList(itemId) {
+async function addToList(itemId, qty) {
+  qty = qty || 1;
   if (shoppingList.some(s => s.itemId === itemId)) return;
   const item = db.items.find(i => i.id === itemId);
   if (!item) return;
   const cat      = db.categories.find(c => c.id === item.category);
+  const maxSort  = shoppingList.reduce((m, i) => Math.max(m, i.sortOrder || 0), -1);
   const listItem = {
-    id:       'li_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-    itemId:   item.id,
-    name:     item.name,
-    category: cat ? cat.name : 'Other',
-    qty:      1,
-    checked:  false
+    id:        'li_' + Date.now() + '_' + Math.random().toString(36).slice(2),
+    itemId:    item.id,
+    name:      item.name,
+    category:  cat ? cat.name : 'Other',
+    qty,
+    checked:   false,
+    sortOrder: maxSort + 1,
+    addedBy:   currentUser,
+    note:      '',
+    listName:  activeListName
   };
   shoppingList.push(listItem);
   updateListBadge();
   refreshItemRow(itemId);
-  showToast('"' + item.name + '" added to list');
+  showToast('"' + item.name + '" added to ' + activeListName + (qty > 1 ? ' (×' + qty + ')' : ''));
+  pendingWrites++;
   const result = await sheetCall({ action: 'addToList', ...listItem });
+  pendingWrites--;
   if (!result.ok) {
     showToast('Error saving to sheet');
     shoppingList = shoppingList.filter(s => s.id !== listItem.id);
@@ -332,13 +526,46 @@ async function addToList(itemId) {
   }
 }
 
+function openAddWithQty(itemId) {
+  const item = db.items.find(i => i.id === itemId);
+  if (!item) return;
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">Add to List</h2>' +
+    '<p style="font-size:15px;color:var(--ink-mid);margin-bottom:16px;">' + esc(item.name) + '</p>' +
+    '<label class="modal-label">Quantity</label>' +
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">' +
+      '<button class="qty-btn" style="font-size:20px;width:36px;height:36px;background:var(--cream);border:1.5px solid var(--parchment);border-radius:6px;" onclick="adjustModalQty(-1)">−</button>' +
+      '<span id="modal-qty-display" style="font-size:20px;font-weight:700;min-width:32px;text-align:center;">1</span>' +
+      '<button class="qty-btn" style="font-size:20px;width:36px;height:36px;background:var(--cream);border:1.5px solid var(--parchment);border-radius:6px;" onclick="adjustModalQty(1)">+</button>' +
+    '</div>' +
+    '<div class="modal-actions">' +
+      '<button class="btn-secondary" onclick="closeModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="confirmAddWithQty(\'' + itemId + '\')">Add to List</button>' +
+    '</div>';
+  openModal();
+}
+
+function adjustModalQty(delta) {
+  const el = document.getElementById('modal-qty-display');
+  if (!el) return;
+  el.textContent = Math.max(1, parseInt(el.textContent) + delta);
+}
+
+async function confirmAddWithQty(itemId) {
+  const qty = parseInt(document.getElementById('modal-qty-display').textContent) || 1;
+  closeModal();
+  await addToList(itemId, qty);
+}
+
 async function removeFromList(itemId) {
   const entry = shoppingList.find(s => s.itemId === itemId);
   if (!entry) return;
   shoppingList = shoppingList.filter(s => s.itemId !== itemId);
   updateListBadge();
   refreshItemRow(itemId);
-  await sheetCall({ action: 'removeFromList', itemId });
+  pendingWrites++;
+  await sheetCall({ action: 'removeFromList', itemId, listName: activeListName });
+  pendingWrites--;
 }
 
 async function removeListItem(listId) {
@@ -347,7 +574,9 @@ async function removeListItem(listId) {
   updateListBadge();
   if (item && item.itemId) refreshItemRow(item.itemId);
   renderShoppingList();
-  await sheetCall({ action: 'removeFromList', id: listId });
+  pendingWrites++;
+  await sheetCall({ action: 'removeFromList', id: listId, listName: activeListName });
+  pendingWrites--;
 }
 
 async function toggleCheck(listId) {
@@ -360,7 +589,9 @@ async function toggleCheck(listId) {
     card.classList.toggle('checked', item.checked);
     card.querySelector('.check-box').textContent = item.checked ? '✓' : '';
   }
+  pendingWrites++;
   await sheetCall({ action: 'updateListItem', id: listId, checked: item.checked });
+  pendingWrites--;
 }
 
 async function changeQty(listId, delta) {
@@ -369,7 +600,9 @@ async function changeQty(listId, delta) {
   item.qty = Math.max(1, item.qty + delta);
   const el = document.getElementById('qty-' + listId);
   if (el) el.textContent = item.qty;
+  pendingWrites++;
   await sheetCall({ action: 'updateListItem', id: listId, qty: item.qty });
+  pendingWrites--;
 }
 
 async function clearChecked() {
@@ -380,7 +613,42 @@ async function clearChecked() {
   updateListBadge();
   renderShoppingList();
   showToast(checked.length + ' item' + (checked.length > 1 ? 's' : '') + ' cleared');
-  await sheetCall({ action: 'clearChecked' });
+  pendingWrites++;
+  await sheetCall({ action: 'clearChecked', listName: activeListName });
+  pendingWrites--;
+}
+
+// ---- ITEM NOTE ----
+function openItemNote(listId) {
+  const item = shoppingList.find(i => i.id === listId);
+  if (!item) return;
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">Note for ' + esc(item.name) + '</h2>' +
+    '<textarea class="modal-input" id="item-note-input" rows="4" placeholder="e.g. get the organic one, only if on sale…" style="resize:vertical">' + esc(item.note || '') + '</textarea>' +
+    '<div class="modal-actions">' +
+      '<button class="btn-secondary" onclick="clearItemNote(\'' + listId + '\')">Clear</button>' +
+      '<button class="btn-primary" onclick="saveItemNote(\'' + listId + '\')">Save</button>' +
+    '</div>';
+  openModal();
+}
+
+async function saveItemNote(listId) {
+  const note = document.getElementById('item-note-input').value.trim();
+  closeModal();
+  const item = shoppingList.find(i => i.id === listId);
+  if (!item) return;
+  item.note = note;
+  renderShoppingList();
+  await sheetCall({ action: 'updateListItem', id: listId, note });
+}
+
+async function clearItemNote(listId) {
+  closeModal();
+  const item = shoppingList.find(i => i.id === listId);
+  if (!item) return;
+  item.note = '';
+  renderShoppingList();
+  await sheetCall({ action: 'updateListItem', id: listId, note: '' });
 }
 
 function refreshItemRow(itemId) {
@@ -403,39 +671,136 @@ function refreshItemRowAfterRemove(itemId) {
   }
 }
 
-// ---- SAVE LIST ----
+// ---- ARCHIVE ----
+async function archiveAndClear() {
+  if (shoppingList.length === 0) { showToast('List is empty'); return; }
+  showToast('Archiving…');
+  const archResult = await sheetCall({ action: 'archiveList', listName: activeListName });
+  if (!archResult.ok) { showToast('Error archiving: ' + (archResult.error || '')); return; }
+  openNewListModal(true); // pass flag to indicate we already archived
+}
+
+async function openArchiveModal() {
+  showToast('Loading archives…');
+  const result = await sheetCall({ action: 'getArchives', listName: activeListName });
+  if (!result.ok || result.archives.length === 0) { showToast('No archives found for "' + activeListName + '"'); return; }
+  const html = result.archives.map(a => {
+    const date = new Date(a.archivedAt).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric', hour:'2-digit', minute:'2-digit' });
+    const unchecked = a.items.filter(i => !i.checked).length;
+    const checked   = a.items.filter(i => i.checked).length;
+    return '<div class="archive-entry">' +
+      '<div class="archive-entry-header">' +
+        '<span class="archive-date">' + date + '</span>' +
+        '<span class="archive-stats">' + unchecked + ' items' + (checked ? ', ' + checked + ' checked' : '') + '</span>' +
+      '</div>' +
+      '<div class="archive-items">' +
+        a.items.slice(0, 8).map(i =>
+          '<span class="archive-item' + (i.checked ? ' archive-item-checked' : '') + '">' + esc(i.name) + (i.qty > 1 ? ' ×' + i.qty : '') + '</span>'
+        ).join('') +
+        (a.items.length > 8 ? '<span class="archive-item-more">+' + (a.items.length - 8) + ' more</span>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">Archive — ' + esc(activeListName) + '</h2>' +
+    '<div style="max-height:420px;overflow-y:auto;">' + html + '</div>' +
+    '<div class="modal-actions"><button class="btn-secondary" onclick="closeModal()">Close</button></div>';
+  openModal();
+}
+
+// ---- NEW NAMED LIST ----
+function openNewNamedListModal() {
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">New List</h2>' +
+    '<label class="modal-label">List Name</label>' +
+    '<input class="modal-input" id="new-list-name" placeholder="e.g. Costco, Weekly Shop…" autofocus />' +
+    '<div class="modal-actions">' +
+      '<button class="btn-secondary" onclick="closeModal()">Cancel</button>' +
+      '<button class="btn-primary" onclick="createNewNamedList()">Create & Switch</button>' +
+    '</div>';
+  openModal();
+}
+
+async function createNewNamedList() {
+  const name = document.getElementById('new-list-name').value.trim();
+  if (!name) { showToast('Please enter a list name'); return; }
+  if (allListNames.includes(name)) { showToast('A list with that name already exists'); return; }
+  closeModal();
+  allListNames.push(name);
+  await switchList(name);
+}
+
+// ---- RENAME / DELETE LIST ----
+function openListOptionsModal() {
+  document.getElementById('generic-modal-content').innerHTML =
+    '<h2 class="modal-title">List Options</h2>' +
+    '<p style="color:var(--ink-light);font-size:13px;margin-bottom:16px;">Managing: <strong>' + esc(activeListName) + '</strong></p>' +
+    '<label class="modal-label">Rename this list</label>' +
+    '<input class="modal-input" id="rename-list-input" value="' + esc(activeListName) + '" />' +
+    '<div class="modal-actions" style="flex-direction:column;gap:8px;margin-top:20px;">' +
+      '<button class="btn-primary" style="width:100%" onclick="doRenameList()">Rename</button>' +
+      '<button class="btn-danger"  style="width:100%" onclick="doDeleteList()">Delete this list</button>' +
+      '<button class="btn-secondary" style="width:100%" onclick="closeModal()">Cancel</button>' +
+    '</div>';
+  openModal();
+}
+
+async function doRenameList() {
+  const newName = document.getElementById('rename-list-input').value.trim();
+  if (!newName || newName === activeListName) { closeModal(); return; }
+  if (allListNames.includes(newName)) { showToast('That name is already taken'); return; }
+  closeModal();
+  const result = await sheetCall({ action: 'renameList', oldName: activeListName, newName });
+  if (result.ok) {
+    const idx = allListNames.indexOf(activeListName);
+    if (idx !== -1) allListNames[idx] = newName;
+    activeListName = newName;
+    localStorage.setItem('pantry_active_list', activeListName);
+    updateListDropdown();
+    showToast('List renamed to "' + newName + '"');
+  } else { showToast('Error renaming list'); }
+}
+
+async function doDeleteList() {
+  if (!window.confirm('Delete list "' + activeListName + '" and all its items?')) return;
+  closeModal();
+  const deletedName = activeListName;
+  const result = await sheetCall({ action: 'deleteList', listName: deletedName });
+  if (result.ok) {
+    allListNames = allListNames.filter(n => n !== deletedName);
+    if (allListNames.length === 0) allListNames = ['Main'];
+    activeListName = allListNames[0];
+    localStorage.setItem('pantry_active_list', activeListName);
+    await loadList(false);
+    updateListDropdown();
+    renderDatabase();
+    showToast('"' + deletedName + '" deleted');
+  } else { showToast('Error deleting list'); }
+}
+
+// ---- SAVE / RESTORE ----
 async function saveCurrentList() {
   if (shoppingList.length === 0) { showToast('Nothing on the list to save'); return; }
   showToast('Saving list…');
-  const result = await sheetCall({ action: 'saveList' });
-  if (result.ok) {
-    showToast(result.count + ' items saved');
-  } else {
-    showToast('Error saving list');
-  }
+  const result = await sheetCall({ action: 'saveList', listName: activeListName });
+  if (result.ok) showToast(result.count + ' items saved');
+  else showToast('Error saving list');
 }
 
-// ---- RESTORE LIST ----
 async function openRestoreModal() {
   showToast('Loading saved list…');
-  const result = await sheetCall({ action: 'getSavedList' });
-  if (!result.ok || result.list.length === 0) {
-    showToast('No saved list found');
-    return;
-  }
-  const savedDate = result.savedAt ? new Date(result.savedAt).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }) : 'unknown date';
+  const result = await sheetCall({ action: 'getSavedList', listName: activeListName });
+  if (!result.ok || result.list.length === 0) { showToast('No saved list found for "' + activeListName + '"'); return; }
+  const savedDate = result.savedAt ? new Date(result.savedAt).toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'}) : 'unknown date';
   document.getElementById('generic-modal-content').innerHTML =
     '<h2 class="modal-title">Restore Saved List</h2>' +
     '<p style="color:var(--ink-light);font-size:13px;margin-bottom:14px;">Saved on ' + savedDate + ' — ' + result.list.length + ' items</p>' +
     '<div class="prev-list-preview" style="max-height:200px">' +
-      result.list.map(i =>
-        '<div class="prev-item-row"><span style="flex:1;font-size:13px;color:var(--ink-mid)">' + esc(i.name) + '</span><span class="cat-tag">' + esc(i.category) + '</span></div>'
-      ).join('') +
+      result.list.map(i => '<div class="prev-item-row"><span style="flex:1;font-size:13px;color:var(--ink-mid)">' + esc(i.name) + '</span><span class="cat-tag">' + esc(i.category) + '</span></div>').join('') +
     '</div>' +
-    '<p style="font-size:13px;color:var(--ink-light);margin:14px 0 6px;">How would you like to restore?</p>' +
-    '<div class="modal-actions" style="flex-direction:column;gap:8px;">' +
-      '<button class="btn-primary" style="width:100%" onclick="doRestoreList(\'merge\')">Merge — add missing items to current list</button>' +
-      '<button class="btn-secondary" style="width:100%" onclick="doRestoreList(\'replace\')">Replace — clear list and restore saved items</button>' +
+    '<div class="modal-actions" style="flex-direction:column;gap:8px;margin-top:16px;">' +
+      '<button class="btn-primary" style="width:100%" onclick="doRestoreList(\'merge\')">Merge — add missing items</button>' +
+      '<button class="btn-secondary" style="width:100%" onclick="doRestoreList(\'replace\')">Replace — clear and restore</button>' +
       '<button class="btn-ghost" style="color:var(--ink-light);width:100%" onclick="closeModal()">Cancel</button>' +
     '</div>';
   openModal();
@@ -444,22 +809,17 @@ async function openRestoreModal() {
 async function doRestoreList(mode) {
   closeModal();
   showToast('Restoring…');
-  const result = await sheetCall({ action: 'restoreList', mode });
-  if (result.ok) {
-    await loadList(false);
-    renderShoppingList();
-    showToast('List restored!');
-  } else {
-    showToast('Error: ' + (result.error || 'Unknown'));
-  }
+  const result = await sheetCall({ action: 'restoreList', mode, listName: activeListName });
+  if (result.ok) { await loadList(false); showToast('List restored!'); }
+  else showToast('Error: ' + (result.error || 'Unknown'));
 }
 
-// ---- NEW LIST MODAL ----
-function openNewListModal() {
-  if (shoppingList.length === 0) { showToast('Your list is empty'); return; }
+// ---- NEW LIST (clear current) ----
+function openNewListModal(alreadyArchived) {
+  if (shoppingList.length === 0 && !alreadyArchived) { showToast('Your list is empty'); return; }
   previousList = JSON.parse(JSON.stringify(shoppingList));
   document.getElementById('generic-modal-content').innerHTML =
-    '<h2 class="modal-title">Start New List</h2>' +
+    '<h2 class="modal-title">Clear "' + esc(activeListName) + '"</h2>' +
     '<p style="color:var(--ink-light);font-size:14px;margin-bottom:16px;">Select items to carry over.</p>' +
     '<div class="prev-list-preview" id="prev-list-preview">' +
       previousList.map(i =>
@@ -476,7 +836,7 @@ function openNewListModal() {
     '</div>' +
     '<div class="modal-actions">' +
       '<button class="btn-secondary" onclick="closeModal()">Cancel</button>' +
-      '<button class="btn-primary" onclick="startNewList()">Start New List</button>' +
+      '<button class="btn-primary" onclick="startNewList()">Clear & Start Fresh</button>' +
     '</div>';
   openModal();
 }
@@ -489,22 +849,21 @@ async function startNewList() {
   const keepIds = [];
   document.querySelectorAll('#prev-list-preview input[type=checkbox]:checked').forEach(cb => keepIds.push(cb.dataset.id));
   closeModal();
-  showToast('Starting new list…');
-  const result = await sheetCall({ action: 'newList', keepIds });
+  showToast('Clearing list…');
+  const result = await sheetCall({ action: 'newList', keepIds, listName: activeListName });
   if (result.ok) {
     await loadList(false);
+    setNote('');
     renderDatabase();
-    showToast('New list started!');
-  } else {
-    showToast('Error starting new list');
-  }
+    showToast('List cleared!');
+  } else showToast('Error clearing list');
 }
 
 // ---- QUICK ADD ----
 function openAddQuickItem() {
   const catOptions = db.categories.map(c => '<option value="' + c.id + '">' + esc(c.name) + '</option>').join('');
   document.getElementById('generic-modal-content').innerHTML =
-    '<h2 class="modal-title">Quick Add Item</h2>' +
+    '<h2 class="modal-title">Quick Add to ' + esc(activeListName) + '</h2>' +
     '<label class="modal-label">Item Name</label>' +
     '<input class="modal-input" id="quick-name" placeholder="e.g. Greek yogurt" autofocus />' +
     '<label class="modal-label">Category (optional)</label>' +
@@ -527,33 +886,28 @@ async function addQuickItem() {
   const saveDB = document.getElementById('quick-save').checked;
   const cat    = db.categories.find(c => c.id === catId);
   closeModal();
-
   let itemId = null;
   if (saveDB && catId) {
     showToast('Saving to database…');
     const dbResult = await sheetCall({ action: 'addItem', name, category: catId });
-    if (dbResult.ok) {
-      itemId = dbResult.id;
-      db.items.push({ id: itemId, name, category: catId });
-      renderDatabase();
-    } else {
-      showToast('Saved to list only (DB error)');
-    }
+    if (dbResult.ok) { itemId = dbResult.id; db.items.push({ id: itemId, name, category: catId }); renderDatabase(); }
+    else showToast('Saved to list only (DB error)');
   }
-
+  const maxSort = shoppingList.reduce((m, i) => Math.max(m, i.sortOrder || 0), -1);
   const listItem = {
-    id:       'li_' + Date.now() + '_' + Math.random().toString(36).slice(2),
-    itemId:   itemId || '',
-    name,
+    id: 'li_' + Date.now() + '_' + Math.random().toString(36).slice(2),
+    itemId: itemId || '', name,
     category: cat ? cat.name : 'Other',
-    qty,
-    checked:  false
+    qty, checked: false, sortOrder: maxSort + 1,
+    addedBy: currentUser, note: '', listName: activeListName
   };
   shoppingList.push(listItem);
   updateListBadge();
   if (document.getElementById('view-list').classList.contains('active')) renderShoppingList();
   showToast('"' + name + '" added to list');
+  pendingWrites++;
   await sheetCall({ action: 'addToList', ...listItem });
+  pendingWrites--;
 }
 
 // ---- ADD / EDIT CATEGORY ----
@@ -576,15 +930,12 @@ async function saveNewCategory() {
   const aisle = document.getElementById('cat-aisle-input').value.trim();
   if (!name) { showToast('Please enter a category name'); return; }
   closeModal();
-  showToast('Creating category…');
   const result = await sheetCall({ action: 'addCategory', name, aisle });
   if (result.ok) {
     db.categories.push({ id: result.id, name, aisle, sortOrder: db.categories.length });
     renderDatabase();
     showToast('Category "' + name + '" created');
-  } else {
-    showToast('Error: ' + (result.error || 'Unknown'));
-  }
+  } else showToast('Error: ' + (result.error || 'Unknown'));
 }
 
 function editCategory(id, currentName, currentAisle) {
@@ -612,9 +963,7 @@ async function saveEditCategory(id) {
     if (cat) { cat.name = name; cat.aisle = aisle; }
     renderDatabase();
     showToast('Category updated');
-  } else {
-    showToast('Error updating category');
-  }
+  } else showToast('Error updating category');
 }
 
 async function deleteCategory(id) {
@@ -627,9 +976,7 @@ async function deleteCategory(id) {
     db.items      = db.items.filter(i => i.category !== id);
     renderDatabase();
     showToast('Category deleted');
-  } else {
-    showToast('Error deleting category');
-  }
+  } else showToast('Error deleting category');
 }
 
 // ---- ADD ITEM ----
@@ -656,22 +1003,19 @@ async function saveNewItem() {
   if (!name)  { showToast('Please enter an item name'); return; }
   if (!catId) { showToast('Please select a category');  return; }
   closeModal();
-  showToast('Saving item…');
   const result = await sheetCall({ action: 'addItem', name, category: catId });
   if (result.ok) {
     db.items.push({ id: result.id, name, category: catId });
     renderDatabase();
     showToast('"' + name + '" added');
-  } else {
-    showToast('Error: ' + (result.error || 'Unknown'));
-  }
+  } else showToast('Error: ' + (result.error || 'Unknown'));
 }
 
 async function deleteItem(itemId) {
   const item = db.items.find(i => i.id === itemId);
   if (!window.confirm('Delete "' + item?.name + '" from the database?')) return;
   const listEntry = shoppingList.find(s => s.itemId === itemId);
-  if (listEntry) await sheetCall({ action: 'removeFromList', id: listEntry.id });
+  if (listEntry) await sheetCall({ action: 'removeFromList', id: listEntry.id, listName: activeListName });
   shoppingList = shoppingList.filter(s => s.itemId !== itemId);
   updateListBadge();
   const result = await sheetCall({ action: 'deleteItem', id: itemId });
@@ -680,9 +1024,38 @@ async function deleteItem(itemId) {
     renderDatabase();
     if (document.getElementById('view-list').classList.contains('active')) renderShoppingList();
     showToast('Item deleted');
-  } else {
-    showToast('Error deleting item');
-  }
+  } else showToast('Error deleting item');
+}
+
+// ---- NOTES ----
+function setNote(text) {
+  const ta = document.getElementById('list-notes');
+  if (ta) ta.value = text || '';
+  const area = document.getElementById('list-notes-area');
+  if (area) area.classList.remove('hidden');
+}
+
+function onNoteInput() {
+  const status = document.getElementById('list-notes-status');
+  if (status) status.textContent = 'Unsaved changes…';
+  clearTimeout(noteDebounce);
+  noteDebounce = setTimeout(saveNote, 2000);
+}
+
+async function saveNote() {
+  clearTimeout(noteDebounce);
+  const ta   = document.getElementById('list-notes');
+  const note = ta ? ta.value : '';
+  const status = document.getElementById('list-notes-status');
+  await sheetCall({ action: 'saveNote', listName: activeListName, note });
+  if (status) { status.textContent = 'Saved'; setTimeout(() => { status.textContent = ''; }, 2000); }
+}
+
+async function loadNote(silent) {
+  try {
+    const result = await sheetCall({ action: 'getNote', listName: activeListName });
+    if (result.ok) setNote(result.note);
+  } catch (e) {}
 }
 
 // ---- VIEWS ----
@@ -703,13 +1076,11 @@ function switchView(view) {
 function openModal() {
   document.getElementById('generic-modal').classList.add('active');
   setTimeout(() => {
-    const first = document.querySelector('#generic-modal-content input, #generic-modal-content select');
+    const first = document.querySelector('#generic-modal-content input, #generic-modal-content select, #generic-modal-content textarea');
     if (first) first.focus();
   }, 100);
 }
-function closeModal() {
-  document.getElementById('generic-modal').classList.remove('active');
-}
+function closeModal() { document.getElementById('generic-modal').classList.remove('active'); }
 document.getElementById('generic-modal').addEventListener('click', e => {
   if (e.target === document.getElementById('generic-modal')) closeModal();
 });
@@ -731,5 +1102,5 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove('show'), 2600);
 }
 function esc(str) {
-  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }

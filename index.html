@@ -4,6 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Pantry — Grocery List Manager</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#2a2118" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Pantry" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
@@ -51,8 +57,16 @@
           <span class="nav-icon">📋</span> Shopping List
           <span id="list-badge" class="badge hidden">0</span>
         </button>
+        <div class="sidebar-list-selector">
+          <div class="sidebar-list-label">Active List</div>
+          <div class="sidebar-list-row">
+            <select id="list-selector" class="sidebar-list-select" onchange="onListSelect(event)"></select>
+            <button class="btn-icon sidebar-list-options" title="Rename or delete list" onclick="openListOptionsModal()">⚙</button>
+          </div>
+        </div>
       </nav>
       <div class="sidebar-footer">
+        <button class="btn-ghost small sidebar-user-btn" onclick="changeUsername()">👤 <span id="sidebar-username"></span></button>
         <button class="btn-ghost small" onclick="openSetup()">⚙ Change Household</button>
       </div>
     </aside>
@@ -72,7 +86,6 @@
             <button class="btn-primary" onclick="openAddItem()">+ Item</button>
           </div>
         </div>
-
         <div id="db-loading" class="loading-state">
           <div class="spinner"></div> Loading your database…
         </div>
@@ -88,17 +101,16 @@
         <div class="view-header">
           <div>
             <h2 class="view-title">Shopping List</h2>
-            <p class="view-sub" id="list-subtitle">Your current shopping list</p>
           </div>
           <div class="view-actions">
             <button class="btn-secondary" onclick="openAddQuickItem()">+ Quick Add</button>
-            <button class="btn-secondary" onclick="openNewListModal()">↺ New List</button>
-            <button class="btn-secondary" onclick="saveCurrentList()">💾 Save List</button>
+            <button class="btn-secondary" onclick="archiveAndClear()">📦 Archive & Clear</button>
+            <button class="btn-secondary" onclick="openArchiveModal()">🗂 View Archives</button>
+            <button class="btn-secondary" onclick="saveCurrentList()">💾 Save</button>
             <button class="btn-secondary" onclick="openRestoreModal()">⟳ Restore</button>
-            <button class="btn-danger" onclick="clearChecked()">Clear Checked</button>
+            <button class="btn-danger"    onclick="clearChecked()">Clear Checked</button>
           </div>
         </div>
-
         <div id="list-loading" class="loading-state hidden">
           <div class="spinner"></div> Loading…
         </div>
@@ -107,11 +119,17 @@
           <p>Your list is empty. Add items from the database.</p>
         </div>
         <div id="list-container" class="list-sections hidden"></div>
+        <div id="list-notes-area" class="list-notes-area hidden">
+          <div class="list-notes-label">📝 Notes</div>
+          <textarea id="list-notes" class="list-notes-input" placeholder="Leave a note for the household…" rows="3" onblur="saveNote()" oninput="onNoteInput()"></textarea>
+          <div id="list-notes-status" class="list-notes-status"></div>
+        </div>
       </section>
 
     </main>
   </div>
 
+  <script src="config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
