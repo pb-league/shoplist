@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pantry — Shared List</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-ZRSKGRCKM3');
+  </script>
+  <style>
+    body { max-width: 600px; margin: 0 auto; padding: 28px 20px 60px; }
+    .share-header { margin-bottom: 24px; }
+    .share-household { font-size: 13px; color: var(--ink-light); margin-bottom: 2px; }
+    .share-title { font-family: var(--font-display); font-size: 28px; font-weight: 700; color: var(--ink); }
+    .share-meta { font-size: 13px; color: var(--ink-light); margin-top: 4px; }
+    .share-section { margin-bottom: 20px; }
+    .share-cat-title { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    .share-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--cream-dark); font-size: 14px; color: var(--ink-mid); }
+    .share-item:last-child { border-bottom: none; }
+    .share-item.checked { opacity: 0.45; text-decoration: line-through; }
+    .share-item-qty { font-size: 12px; color: var(--ink-light); background: var(--cream-dark); border-radius: 20px; padding: 1px 7px; }
+    .share-note { margin-top: 28px; padding: 14px 16px; background: var(--cream-dark); border-radius: var(--radius-sm); font-size: 14px; color: var(--ink-mid); font-style: italic; }
+    .share-note-label { font-style: normal; font-weight: 600; font-size: 12px; color: var(--ink-light); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+    .share-open-btn { display: block; margin-top: 32px; text-align: center; background: var(--terracotta); color: #fff; border-radius: var(--radius-sm); padding: 12px 20px; text-decoration: none; font-family: var(--font-body); font-size: 15px; font-weight: 600; }
+    .share-open-btn:hover { background: var(--terracotta-light); }
+    .loading-state { padding: 60px 0; text-align: center; color: var(--ink-light); }
+    .error-state { padding: 40px 0; text-align: center; color: var(--danger); }
+  </style>
+</head>
+<body>
+  <div id="content"><div class="loading-state">Loading list…</div></div>
+  <script src="config.js"></script>
+  <script>
+    async function load() {
+      const params   = new URLSearchParams(window.location.search);
+      const code     = params.get('code');
+      const listName = params.get('list') || 'Main';
+      if (!code) { showError('No household code in URL.'); return; }
+
+      try {
+        const res  = await fetch(window.PANTRY_MASTER_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ action: 'getSharedList', code, listName })
+        });
+        const data = await res.json();
+        if (!data.ok) { showError(data.error || 'Could not load list.'); return; }
+        render(data);
+      } catch (e) {
+        showError('Could not reach Pantry server.');
+      }
+    }
+
+    function render({ householdName, listName, list, note }) {
+      document.title = 'Pantry — ' + listName;
+      const unchecked = list.filter(i => !i.checked);
+      const checked   = list.filter(i => i.checked);
+
+      // Group unchecked by category
+      const byCategory = {};
+      unchecked.forEach(item => {
+        const cat = item.category || 'Other';
+        if (!byCategory[cat]) byCategory[cat] = [];
+        byCategory[cat].push(item);
+      });
+
+      const date = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+      let html = '<div class="share-header">' +
+        '<div class="share-household">🛒 ' + esc(householdName) + '</div>' +
+        '<div class="share-title">' + esc(listName) + '</div>' +
+        '<div class="share-meta">' + unchecked.length + ' items · Updated ' + date + '</div>' +
+      '</div>';
+
+      Object.entries(byCategory).forEach(([cat, items]) => {
+        html += '<div class="share-section"><div class="share-cat-title">' + esc(cat) + '</div>';
+        items.forEach(i => {
+          html += '<div class="share-item">' +
+            '<span style="flex:1">' + esc(i.name) + (i.note ? ' <span style="color:var(--ink-light);font-style:italic;font-size:12px;">— ' + esc(i.note) + '</span>' : '') + '</span>' +
+            (i.qty > 1 ? '<span class="share-item-qty">×' + i.qty + '</span>' : '') +
+          '</div>';
+        });
+        html += '</div>';
+      });
+
+      if (checked.length > 0) {
+        html += '<div class="share-section"><div class="share-cat-title" style="color:var(--ink-light)">Already got ✓</div>';
+        checked.forEach(i => {
+          html += '<div class="share-item checked"><span style="flex:1">' + esc(i.name) + '</span>' +
+            (i.qty > 1 ? '<span class="share-item-qty">×' + i.qty + '</span>' : '') + '</div>';
+        });
+        html += '</div>';
+      }
+
+      if (note) {
+        html += '<div class="share-note"><div class="share-note-label">📝 Note</div>' + esc(note) + '</div>';
+      }
+
+      html += '<a class="share-open-btn" href="index.html?code=' + esc(new URLSearchParams(window.location.search).get('code')) + '">Open in Pantry →</a>';
+
+      document.getElementById('content').innerHTML = html;
+    }
+
+    function showError(msg) {
+      document.getElementById('content').innerHTML = '<div class="error-state">' + msg + '</div>';
+    }
+
+    function esc(str) {
+      return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    load();
+  </script>
+</body>
+</html>

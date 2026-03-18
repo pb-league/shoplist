@@ -14,6 +14,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <!-- Google Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-ZRSKGRCKM3');
+  </script>
 </head>
 <body>
 
@@ -121,6 +129,7 @@
           </div>
           <div class="view-actions">
             <button class="btn-secondary" onclick="openAddQuickItem()">+ Quick Add</button>
+            <button class="btn-secondary" onclick="shareList()">🔗 Share</button>
             <button class="btn-secondary" onclick="archiveAndClear()">📦 Archive & Clear</button>
             <button class="btn-secondary" onclick="openArchiveModal()">🗂 View Archives</button>
             <button class="btn-secondary" onclick="saveCurrentList()">💾 Save</button>
